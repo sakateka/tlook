@@ -2,7 +2,7 @@
 A tool for fast charting in the terminal.
 
 # How to
-You have a metric in the form
+You have metrics in the form
 ```
 key1=value1
 key2=value2
