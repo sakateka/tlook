@@ -6,8 +6,8 @@ use ratatui::{
     style::{Color, Style, Stylize},
     symbols,
     widgets::{
-        block::Title, Axis, Block, Borders, Chart, Clear, Dataset, LegendPosition, Row, Table,
-        Widget,
+        block::Title, Axis, Block, Borders, Chart, Clear, Dataset, GraphType, LegendPosition, Row,
+        Table, Widget,
     },
     Frame,
 };
@@ -58,6 +58,7 @@ impl Widget for &app::App {
                 Dataset::default()
                     .name(name)
                     .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
                     .style(Style::default().fg(PALETTE_DARK[idx % PALETTE_DARK.len()]))
                     .data(set)
             })

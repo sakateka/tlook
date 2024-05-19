@@ -184,10 +184,12 @@ pub fn spawn_stdin_reader() -> io::Result<Receiver<String>> {
             // TODO remove unwraps
             let line = line.unwrap();
 
-            let res = tx.send(line);
-            if res.is_err() {
-                log::error!("receiver closed? {res:?}");
-                return;
+            for metric in line.split(';').filter(|x| !x.is_empty()) {
+                let res = tx.send(metric.to_string());
+                if res.is_err() {
+                    log::error!("receiver closed? {res:?}");
+                    return;
+                }
             }
         }
     });
