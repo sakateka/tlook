@@ -1,7 +1,8 @@
 use std::{
     collections::BTreeMap,
     fmt::Display,
-    io,
+    fs::File,
+    io::{self, BufRead, BufReader},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
@@ -54,6 +55,17 @@ impl Display for ChartScale {
 pub struct SignalItem {
     pub original: Vec<f64>,
     pub chart: Vec<(f64, f64)>,
+}
+
+impl SignalItem {
+    fn drain(&mut self, oldest: f64) -> usize {
+        let drain_to = self.chart.partition_point(|x| x.0 < oldest);
+        if drain_to > 0 {
+            self.chart.drain(..drain_to);
+            self.original.drain(..drain_to);
+        }
+        self.original.len()
+    }
 }
 
 pub struct App {
@@ -142,16 +154,30 @@ impl App {
                 };
             }
             KeyCode::Char('w') => {
-                self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 0.8)
+                self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 0.8);
             }
             KeyCode::Char('W') => {
-                self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 1.2)
+                self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 1.2);
             }
             KeyCode::Char('h') => {
-                self.history = Duration::from_secs_f64(self.history.as_secs_f64() / 2.0)
+                let x_sec = self.start_time.elapsed().as_secs_f64();
+                let oldest = x_sec - self.history.as_secs_f64();
+                let keys: Vec<String> = self.signals.keys().cloned().collect();
+                for k in keys {
+                    let remaining = {
+                        let Some(s) = self.signals.get_mut(&k) else {
+                            continue;
+                        };
+                        s.drain(oldest)
+                    };
+                    if remaining == 0 {
+                        self.signals.remove(&k);
+                    }
+                }
+                self.history = Duration::from_secs_f64(self.history.as_secs_f64() / 2.0);
             }
             KeyCode::Char('H') => {
-                self.history = Duration::from_secs_f64(self.history.as_secs_f64() * 2.0)
+                self.history = Duration::from_secs_f64(self.history.as_secs_f64() * 2.0);
             }
             KeyCode::Char('a') => self.axis_labels = !self.axis_labels,
             KeyCode::Char('l') => self.legend = !self.legend,
@@ -178,11 +204,7 @@ impl App {
                         .push((x_sec, Self::scale(self.scale_mode, value)));
 
                     let oldest = x_sec - self.history.as_secs_f64();
-                    let drain_to = data.chart.partition_point(|x| x.0 < oldest);
-                    if drain_to > 0 {
-                        data.chart.drain(..drain_to);
-                        data.original.drain(..drain_to);
-                    }
+                    data.drain(oldest);
                 }
                 Err(e) => {
                     // TODO: just skip? and don't exit?
@@ -229,14 +251,28 @@ impl App {
     }
 }
 
-pub fn spawn_stdin_reader() -> io::Result<Receiver<String>> {
+pub fn stdin_reader() -> Box<dyn Iterator<Item = io::Result<String>>> {
+    Box::new(io::stdin().lines())
+}
+
+pub fn file_reader(file: String) -> Box<dyn Iterator<Item = io::Result<String>>> {
+    let f = File::open(file).unwrap();
+    Box::new(BufReader::new(f).lines())
+}
+
+pub fn get_input_channel(mode: String) -> io::Result<Receiver<String>> {
     let (tx, rx) = mpsc::channel();
+
     // TODO join handler
     thread::spawn(move || {
-        let input = io::stdin();
-        for line in input.lines() {
+        let lines = if mode == "stdin" {
+            stdin_reader()
+        } else {
+            file_reader(mode)
+        };
+        for line in lines {
             // TODO remove unwraps
-            let line = line.unwrap();
+            let line = line.unwrap_or_default();
 
             for metric in line.split(';').filter(|x| !x.is_empty()) {
                 let res = tx.send(metric.to_string());
