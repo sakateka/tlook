@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Div};
 
 use ratatui::{
     buffer::Buffer,
@@ -12,7 +12,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app;
+use crate::app::{self, ChartScale};
 
 const PALETTE_DARK: &[Color] = &[
     Color::Indexed(202),
@@ -30,20 +30,34 @@ const PALETTE_DARK: &[Color] = &[
 impl Widget for &app::App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let mut max_values = HashMap::new();
-        let (max_name_len, min, max) = self
+        let (max_name_len, original_min_max, scaled_min_max) = self
             .signals()
             .map(|(name, set)| {
-                let min_max = set.iter().fold((f64::MAX, f64::MIN), |acc, &(_, val)| {
-                    (acc.0.min(val), acc.1.max(val))
-                });
-                (name, min_max)
+                let original_min_max =
+                    set.original.iter().fold((f64::MAX, f64::MIN), |acc, &val| {
+                        (acc.0.min(val), acc.1.max(val))
+                    });
+                let scaled_min_max = set
+                    .chart
+                    .iter()
+                    .fold((f64::MAX, f64::MIN), |acc, &(_, val)| {
+                        (acc.0.min(val), acc.1.max(val))
+                    });
+                (name, (original_min_max, scaled_min_max))
             })
-            .fold((0, f64::MAX, f64::MIN), |acc, (name, (min, max))| {
-                let val = max_values.entry(name).or_insert(f64::MIN);
-                *val = val.max(max);
+            .fold(
+                (0, (f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
+                |acc, (name, ((omin, omax), (smin, smax)))| {
+                    let val = max_values.entry(name).or_insert(f64::MIN);
+                    *val = val.max(omax);
 
-                (acc.0.max(name.len()), acc.1.min(min), acc.2.max(max))
-            });
+                    (
+                        acc.0.max(name.len()),
+                        (acc.1 .0.min(omin), acc.1 .1.max(omax)),
+                        (acc.2 .0.min(smin), acc.2 .1.max(smax)),
+                    )
+                },
+            );
 
         let datasets: Vec<Dataset> = self
             .signals()
@@ -52,7 +66,7 @@ impl Widget for &app::App {
                 let name = format!(
                     "{name:0$} {1:.2} (max {2:.2})",
                     max_name_len,
-                    set.last().unwrap_or(&(0.0, f64::NAN)).1,
+                    set.original.last().unwrap_or(&f64::NAN),
                     max_values.get(name).unwrap_or(&f64::NAN),
                 );
                 Dataset::default()
@@ -60,7 +74,7 @@ impl Widget for &app::App {
                     .marker(symbols::Marker::Braille)
                     .graph_type(GraphType::Line)
                     .style(Style::default().fg(PALETTE_DARK[idx % PALETTE_DARK.len()]))
-                    .data(set)
+                    .data(&set.chart)
             })
             .collect();
 
@@ -69,7 +83,7 @@ impl Widget for &app::App {
         let mut x_axis = Axis::default()
             .style(Style::default().fg(Color::Gray))
             .bounds(window_width);
-        let window_height = [min, max];
+        let window_height = [scaled_min_max.0, scaled_min_max.1];
         let mut y_axis = Axis::default()
             .style(Style::default().fg(Color::Gray))
             // .labels(vec!["-20".bold(), "0".into(), "20".bold()])
@@ -78,7 +92,10 @@ impl Widget for &app::App {
         let mut legend_position = None;
         if self.legend {
             legend_position = Some(LegendPosition::TopLeft);
-            x_axis = x_axis.title(format!("w={:.2?} h={:.2?}", self.window, self.history));
+            y_axis = y_axis.title(format!(
+                "w={:.2?} h={:.2?} s={}",
+                self.window, self.history, self.scale_mode
+            ));
         }
         if self.axis_labels {
             x_axis = x_axis.labels(vec![
@@ -87,10 +104,15 @@ impl Widget for &app::App {
                 "0s ago".into(),
             ]);
 
+            let middle_label = if self.scale_mode == ChartScale::Liner {
+                format!("{:.2}", window_height.iter().sum::<f64>().div(2.0))
+            } else {
+                "...".to_string()
+            };
             y_axis = y_axis.labels(vec![
-                format!("{:.2}", window_height[0]).into(),
-                format!("{:.2}", window_height.iter().sum::<f64>() / 2.0).into(),
-                format!("{:.2}", window_height[1]).into(),
+                format!("{:.2}", original_min_max.0).into(),
+                middle_label.into(),
+                format!("{:.2}", original_min_max.1).into(),
             ]);
         }
 
@@ -121,6 +143,7 @@ pub fn render_help(f: &mut Frame) {
         Row::new(vec!["H", "keep 2x more history"]),
         Row::new(vec!["a", "show/hide axis labels"]),
         Row::new(vec!["l", "show/hide legend"]),
+        Row::new(vec!["s", "rotate liner, asinh scale mode"]),
     ];
     // Columns widths are constrained in the same way as Layout...
     let widths = Constraint::from_fills([3, 18]);

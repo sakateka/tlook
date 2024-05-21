@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    fmt::Display,
     io,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -25,12 +26,42 @@ pub enum CurrentScreen {
     Help,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum ChartScale {
+    Liner,
+    Asinh,
+}
+
+impl ChartScale {
+    pub fn next(&self) -> Self {
+        match self {
+            ChartScale::Liner => ChartScale::Asinh,
+            ChartScale::Asinh => ChartScale::Liner,
+        }
+    }
+}
+
+impl Display for ChartScale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChartScale::Liner => f.write_str("liner"),
+            ChartScale::Asinh => f.write_str("asinh"),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct SignalItem {
+    pub original: Vec<f64>,
+    pub chart: Vec<(f64, f64)>,
+}
+
 pub struct App {
     start_time: Instant,
     pub history: Duration,
     pub window: Duration,
-    signals: BTreeMap<String, Vec<(f64, f64)>>,
+    signals: BTreeMap<String, SignalItem>,
+    pub scale_mode: ChartScale,
     input: Receiver<String>,
     tick_rate: Duration,
     current_screen: CurrentScreen,
@@ -47,6 +78,7 @@ impl App {
             history: Duration::from_secs(3600),
             window: Duration::from_secs(60),
             signals: BTreeMap::new(),
+            scale_mode: ChartScale::Liner,
             input,
             tick_rate: Duration::from_millis(250),
             current_screen: CurrentScreen::Main,
@@ -123,6 +155,10 @@ impl App {
             }
             KeyCode::Char('a') => self.axis_labels = !self.axis_labels,
             KeyCode::Char('l') => self.legend = !self.legend,
+            KeyCode::Char('s') => {
+                self.scale_mode = self.scale_mode.next();
+                self.apply_new_scale_mode()
+            }
             _ => {}
         }
         Ok(())
@@ -136,13 +172,16 @@ impl App {
                 Ok((name, value)) => {
                     log::debug!("tick line: {name}={value}");
                     let x_sec = self.start_time.elapsed().as_secs_f64();
-                    let data = self.signals.entry(name).or_default();
-                    data.push((x_sec, value));
+                    let data = self.signals.entry(name.clone()).or_default();
+                    data.original.push(value);
+                    data.chart
+                        .push((x_sec, Self::scale(self.scale_mode, value)));
 
                     let oldest = x_sec - self.history.as_secs_f64();
-                    let drain_to = data.partition_point(|x| x.0 < oldest);
+                    let drain_to = data.chart.partition_point(|x| x.0 < oldest);
                     if drain_to > 0 {
-                        data.drain(..drain_to);
+                        data.chart.drain(..drain_to);
+                        data.original.drain(..drain_to);
                     }
                 }
                 Err(e) => {
@@ -166,11 +205,26 @@ impl App {
         self.exit.store(true, Ordering::Relaxed);
     }
 
+    fn apply_new_scale_mode(&mut self) {
+        for (_, item) in self.signals.iter_mut() {
+            item.chart.iter_mut().enumerate().for_each(|(idx, data)| {
+                data.1 = Self::scale(self.scale_mode, item.original[idx]);
+            });
+        }
+    }
+
+    fn scale(mode: ChartScale, value: f64) -> f64 {
+        match mode {
+            ChartScale::Liner => value,
+            ChartScale::Asinh => value.asinh(),
+        }
+    }
+
     pub fn elapsed(&self) -> f64 {
         self.start_time.elapsed().as_secs_f64()
     }
 
-    pub fn signals(&self) -> impl Iterator<Item = (&String, &Vec<(f64, f64)>)> + '_ {
+    pub fn signals(&self) -> impl Iterator<Item = (&String, &SignalItem)> + '_ {
         self.signals.iter()
     }
 }
