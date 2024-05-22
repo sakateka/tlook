@@ -21,10 +21,11 @@ use ratatui::Frame;
 use crate::term;
 use crate::ui;
 
-#[derive(Debug)]
-pub enum CurrentScreen {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ScreenMode {
     Main,
     Help,
+    Pause,
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -52,12 +53,12 @@ impl Display for ChartScale {
 }
 
 #[derive(Default)]
-pub struct SignalItem {
+pub struct Signals {
     pub original: Vec<f64>,
     pub chart: Vec<(f64, f64)>,
 }
 
-impl SignalItem {
+impl Signals {
     fn drain(&mut self, oldest: f64) -> usize {
         let drain_to = self.chart.partition_point(|x| x.0 < oldest);
         if drain_to > 0 {
@@ -68,34 +69,44 @@ impl SignalItem {
     }
 }
 
+pub struct Signal {
+    pub name: String,
+    pub x_time: f64,
+    pub value: f64,
+}
+
 pub struct App {
-    start_time: Instant,
     pub history: Duration,
     pub window: Duration,
-    signals: BTreeMap<String, SignalItem>,
     pub scale_mode: ChartScale,
-    input: Receiver<String>,
-    tick_rate: Duration,
-    current_screen: CurrentScreen,
     pub axis_labels: bool,
     pub legend: bool,
+
+    elapsed: f64,
+    start_time: Instant,
+    input: Receiver<Signal>,
+    signals: BTreeMap<String, Signals>,
+    tick_rate: Duration,
+    current_mode: ScreenMode,
     exit: AtomicBool,
 }
 
 impl App {
-    pub fn with_input(input: Receiver<String>) -> Self {
+    pub fn new(input: Receiver<Signal>, start_time: Instant) -> Self {
         Self {
-            start_time: Instant::now(),
             // TODO: confugure this
             history: Duration::from_secs(3600),
             window: Duration::from_secs(60),
-            signals: BTreeMap::new(),
             scale_mode: ChartScale::Liner,
-            input,
-            tick_rate: Duration::from_millis(250),
-            current_screen: CurrentScreen::Main,
             axis_labels: false,
             legend: true,
+
+            elapsed: 0.0,
+            start_time,
+            input,
+            signals: BTreeMap::new(),
+            tick_rate: Duration::from_millis(250),
+            current_mode: ScreenMode::Main,
             exit: AtomicBool::new(false),
         }
     }
@@ -120,7 +131,7 @@ impl App {
 
     fn render_frame(&self, frame: &mut Frame) {
         frame.render_widget(self, frame.size());
-        if let CurrentScreen::Help = self.current_screen {
+        if let ScreenMode::Help = self.current_mode {
             ui::render_help(frame);
         }
     }
@@ -141,16 +152,17 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<()> {
         match key_event.code {
             KeyCode::Char('q') => {
-                if let CurrentScreen::Help = self.current_screen {
-                    self.current_screen = CurrentScreen::Main
+                if let ScreenMode::Help = self.current_mode {
+                    self.current_mode = ScreenMode::Main
                 } else {
                     self.exit()
                 }
             }
             KeyCode::Char('?') => {
-                self.current_screen = match self.current_screen {
-                    CurrentScreen::Main => CurrentScreen::Help,
-                    CurrentScreen::Help => CurrentScreen::Main,
+                self.current_mode = match self.current_mode {
+                    ScreenMode::Main => ScreenMode::Help,
+                    ScreenMode::Help => ScreenMode::Main,
+                    mode => mode,
                 };
             }
             KeyCode::Char('w') => {
@@ -181,6 +193,13 @@ impl App {
             }
             KeyCode::Char('a') => self.axis_labels = !self.axis_labels,
             KeyCode::Char('l') => self.legend = !self.legend,
+            KeyCode::Char(' ') => {
+                self.current_mode = match self.current_mode {
+                    ScreenMode::Main => ScreenMode::Pause,
+                    ScreenMode::Pause => ScreenMode::Main,
+                    mode => mode,
+                };
+            }
             KeyCode::Char('s') => {
                 self.scale_mode = self.scale_mode.next();
                 self.apply_new_scale_mode()
@@ -191,29 +210,23 @@ impl App {
     }
 
     fn on_tick(&mut self) {
-        let mut count = 0;
-        for line in self.input.try_iter() {
-            count += 1;
-            match Self::parse_input(&line) {
-                Ok((name, value)) => {
-                    log::debug!("tick line: {name}={value}");
-                    let x_sec = self.start_time.elapsed().as_secs_f64();
-                    let data = self.signals.entry(name.clone()).or_default();
-                    data.original.push(value);
-                    data.chart
-                        .push((x_sec, Self::scale(self.scale_mode, value)));
-
-                    let oldest = x_sec - self.history.as_secs_f64();
-                    data.drain(oldest);
-                }
-                Err(e) => {
-                    // TODO: just skip? and don't exit?
-                    log::error!("input err {e} for {line}");
-                    self.exit();
-                }
-            }
+        if self.current_mode == ScreenMode::Pause {
+            return;
         }
-        log::debug!("tick {count} lines");
+        self.elapsed = self.start_time.elapsed().as_secs_f64();
+
+        let mut count = 0;
+        for signal in self.input.try_iter() {
+            let data = self.signals.entry(signal.name.clone()).or_default();
+            data.original.push(signal.value);
+            data.chart
+                .push((signal.x_time, Self::scale(self.scale_mode, signal.value)));
+
+            let oldest = signal.x_time - self.history.as_secs_f64();
+            data.drain(oldest);
+            count += 1;
+        }
+        log::debug!("tick: receive {count} signals");
     }
 
     fn parse_input(line: &str) -> Result<(String, f64)> {
@@ -243,10 +256,10 @@ impl App {
     }
 
     pub fn elapsed(&self) -> f64 {
-        self.start_time.elapsed().as_secs_f64()
+        self.elapsed
     }
 
-    pub fn signals(&self) -> impl Iterator<Item = (&String, &SignalItem)> + '_ {
+    pub fn signals(&self) -> impl Iterator<Item = (&String, &Signals)> + '_ {
         self.signals.iter()
     }
 }
@@ -260,7 +273,7 @@ pub fn file_reader(file: String) -> Box<dyn Iterator<Item = io::Result<String>>>
     Box::new(BufReader::new(f).lines())
 }
 
-pub fn get_input_channel(mode: String) -> io::Result<Receiver<String>> {
+pub fn get_input_channel(mode: String, start_time: Instant) -> io::Result<Receiver<Signal>> {
     let (tx, rx) = mpsc::channel();
 
     // TODO join handler
@@ -271,14 +284,30 @@ pub fn get_input_channel(mode: String) -> io::Result<Receiver<String>> {
             file_reader(mode)
         };
         for line in lines {
-            // TODO remove unwraps
-            let line = line.unwrap_or_default();
+            let Ok(line) = line else {
+                log::error!("ignore input error: {:?}", line);
+                continue;
+            };
 
             for metric in line.split(';').filter(|x| !x.is_empty()) {
-                let res = tx.send(metric.to_string());
-                if res.is_err() {
-                    log::error!("receiver closed? {res:?}");
-                    return;
+                match App::parse_input(metric) {
+                    Ok((name, value)) => {
+                        log::debug!("line: {name}={value}");
+                        let x_time = start_time.elapsed().as_secs_f64();
+                        let res = tx.send(Signal {
+                            name,
+                            x_time,
+                            value,
+                        });
+                        if res.is_err() {
+                            log::error!("receiver closed? {res:?}");
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("ignore parsing err {e} for {line}");
+                        continue;
+                    }
                 }
             }
         }

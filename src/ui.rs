@@ -144,6 +144,7 @@ pub fn render_help(f: &mut Frame) {
         Row::new(vec!["a", "show/hide axis labels"]),
         Row::new(vec!["l", "show/hide legend"]),
         Row::new(vec!["s", "rotate liner, asinh scale mode"]),
+        Row::new(vec!["Space", "pause chart"]),
     ];
     // Columns widths are constrained in the same way as Layout...
     let widths = Constraint::from_fills([3, 18]);
