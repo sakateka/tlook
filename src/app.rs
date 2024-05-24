@@ -24,7 +24,6 @@ use crate::ui;
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ScreenMode {
     Main,
-    Help,
     Pause,
 }
 
@@ -89,6 +88,7 @@ pub struct App {
     signals: BTreeMap<String, Signals>,
     tick_rate: Duration,
     current_mode: ScreenMode,
+    show_help: bool,
     exit: AtomicBool,
 }
 
@@ -109,6 +109,7 @@ impl App {
             signals: BTreeMap::new(),
             tick_rate: Duration::from_millis(250),
             current_mode: ScreenMode::Main,
+            show_help: false,
             exit: AtomicBool::new(false),
         }
     }
@@ -133,7 +134,7 @@ impl App {
 
     fn render_frame(&self, frame: &mut Frame) {
         frame.render_widget(self, frame.size());
-        if let ScreenMode::Help = self.current_mode {
+        if self.show_help {
             ui::render_help(frame);
         }
     }
@@ -154,19 +155,13 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<()> {
         match key_event.code {
             KeyCode::Char('q') => {
-                if let ScreenMode::Help = self.current_mode {
-                    self.current_mode = ScreenMode::Main
+                if self.show_help {
+                    self.show_help = false;
                 } else {
                     self.exit()
                 }
             }
-            KeyCode::Char('?') => {
-                self.current_mode = match self.current_mode {
-                    ScreenMode::Main => ScreenMode::Help,
-                    ScreenMode::Help => ScreenMode::Main,
-                    mode => mode,
-                };
-            }
+            KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('w') => {
                 self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 0.8);
             }
@@ -199,7 +194,6 @@ impl App {
                 self.current_mode = match self.current_mode {
                     ScreenMode::Main => ScreenMode::Pause,
                     ScreenMode::Pause => ScreenMode::Main,
-                    mode => mode,
                 };
             }
             KeyCode::Char('s') => {
