@@ -78,12 +78,13 @@ pub struct Signal {
 pub struct App {
     pub history: Duration,
     pub window: Duration,
+    pub move_speed: f64,
     pub scale_mode: ChartScale,
     pub axis_labels: bool,
     pub legend: bool,
 
+    start_point: Instant,
     elapsed: f64,
-    start_time: Instant,
     input: Receiver<Signal>,
     signals: BTreeMap<String, Signals>,
     tick_rate: Duration,
@@ -97,12 +98,13 @@ impl App {
             // TODO: confugure this
             history: Duration::from_secs(3600),
             window: Duration::from_secs(60),
+            move_speed: 1.0,
             scale_mode: ChartScale::Liner,
             axis_labels: false,
             legend: true,
 
             elapsed: 0.0,
-            start_time,
+            start_point: start_time,
             input,
             signals: BTreeMap::new(),
             tick_rate: Duration::from_millis(250),
@@ -172,7 +174,7 @@ impl App {
                 self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 1.2);
             }
             KeyCode::Char('h') => {
-                let x_sec = self.start_time.elapsed().as_secs_f64();
+                let x_sec = self.start_point.elapsed().as_secs_f64();
                 let oldest = x_sec - self.history.as_secs_f64();
                 let keys: Vec<String> = self.signals.keys().cloned().collect();
                 for k in keys {
@@ -204,6 +206,16 @@ impl App {
                 self.scale_mode = self.scale_mode.next();
                 self.apply_new_scale_mode()
             }
+            KeyCode::Char('m') => self.move_speed /= 10.0,
+            KeyCode::Char('M') => self.move_speed *= 10.0,
+            KeyCode::Left if self.current_mode == ScreenMode::Pause => {
+                if self.elapsed > self.move_speed {
+                    self.elapsed -= self.move_speed;
+                }
+            }
+            KeyCode::Right if self.current_mode == ScreenMode::Pause => {
+                self.elapsed += self.move_speed
+            }
             _ => {}
         }
         Ok(())
@@ -213,7 +225,7 @@ impl App {
         if self.current_mode == ScreenMode::Pause {
             return;
         }
-        self.elapsed = self.start_time.elapsed().as_secs_f64();
+        self.elapsed = self.start_point.elapsed().as_secs_f64();
 
         let mut count = 0;
         for signal in self.input.try_iter() {
@@ -257,6 +269,14 @@ impl App {
 
     pub fn elapsed(&self) -> f64 {
         self.elapsed
+    }
+    pub fn window(&self) -> f64 {
+        self.window.as_secs_f64()
+    }
+    pub fn on_screen(&self, time: f64) -> bool {
+        let left_border = self.elapsed() - self.window();
+        let right_border = self.elapsed();
+        time >= left_border && time <= right_border
     }
 
     pub fn signals(&self) -> impl Iterator<Item = (&String, &Signals)> + '_ {

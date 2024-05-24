@@ -33,28 +33,32 @@ impl Widget for &app::App {
         let (max_name_len, original_min_max, scaled_min_max) = self
             .signals()
             .map(|(name, set)| {
-                let original_min_max =
-                    set.original.iter().fold((f64::MAX, f64::MIN), |acc, &val| {
-                        (acc.0.min(val), acc.1.max(val))
-                    });
-                let scaled_min_max = set
-                    .chart
+                let (original_min_max, scaled_min_max) = set
+                    .original
                     .iter()
-                    .fold((f64::MAX, f64::MIN), |acc, &(_, val)| {
-                        (acc.0.min(val), acc.1.max(val))
-                    });
+                    .zip(set.chart.iter())
+                    .filter(|(_, (elapsed, _))| self.on_screen(*elapsed))
+                    .fold(
+                        ((f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
+                        |(acc_orig, acc_scaled), (orig_val, (_, val))| {
+                            (
+                                (acc_orig.0.min(*orig_val), acc_orig.1.max(*orig_val)),
+                                (acc_scaled.0.min(*val), acc_scaled.1.max(*val)),
+                            )
+                        },
+                    );
                 (name, (original_min_max, scaled_min_max))
             })
             .fold(
                 (0, (f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
-                |acc, (name, ((omin, omax), (smin, smax)))| {
+                |(name_len, oacc, sacc), (name, ((omin, omax), (smin, smax)))| {
                     let val = max_values.entry(name).or_insert(f64::MIN);
                     *val = val.max(omax);
 
                     (
-                        acc.0.max(name.len()),
-                        (acc.1 .0.min(omin), acc.1 .1.max(omax)),
-                        (acc.2 .0.min(smin), acc.2 .1.max(smax)),
+                        name_len.max(name.len()),
+                        (oacc.0.min(omin), oacc.1.max(omax)),
+                        (sacc.0.min(smin), sacc.1.max(smax)),
                     )
                 },
             );
@@ -66,7 +70,12 @@ impl Widget for &app::App {
                 let name = format!(
                     "{name:0$} {1:.2} (max {2:.2})",
                     max_name_len,
-                    set.original.last().unwrap_or(&f64::NAN),
+                    set.original
+                        .iter()
+                        .zip(set.chart.iter())
+                        .rev()
+                        .find(|(_, (time, _))| self.on_screen(*time))
+                        .map_or(&f64::NAN, |v| { v.0 }),
                     max_values.get(name).unwrap_or(&f64::NAN),
                 );
                 Dataset::default()
@@ -93,15 +102,15 @@ impl Widget for &app::App {
         if self.legend {
             legend_position = Some(LegendPosition::TopLeft);
             y_axis = y_axis.title(format!(
-                "w={:.2?} h={:.2?} s={}",
-                self.window, self.history, self.scale_mode
+                "w={:.2?} h={:.2?} m={}s s={}",
+                self.window, self.history, self.move_speed, self.scale_mode,
             ));
         }
         if self.axis_labels {
             x_axis = x_axis.labels(vec![
-                format!("{:.1?}", self.window).into(),
-                format!("{:.1?}", self.window / 2).into(),
-                "0s ago".into(),
+                format!("{:.1}s", self.elapsed() - self.window()).into(),
+                format!("{:.1}s", self.elapsed() - self.window() / 2.0).into(),
+                format!("{:.1}s", self.elapsed()).into(),
             ]);
 
             let middle_label = if self.scale_mode == ChartScale::Liner {
@@ -144,6 +153,16 @@ pub fn render_help(f: &mut Frame) {
         Row::new(vec!["a", "show/hide axis labels"]),
         Row::new(vec!["l", "show/hide legend"]),
         Row::new(vec!["s", "rotate liner, asinh scale mode"]),
+        Row::new(vec![
+            "m",
+            "set 10x slower window movement speed (in pause mode)",
+        ]),
+        Row::new(vec![
+            "M",
+            "set 10x faster window movement speed (in pause mode)",
+        ]),
+        Row::new(vec!["Right", "move window to right (in pause mode)"]),
+        Row::new(vec!["Left", "move window to right (in pause mode)"]),
         Row::new(vec!["Space", "pause chart"]),
     ];
     // Columns widths are constrained in the same way as Layout...
