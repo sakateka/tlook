@@ -66,17 +66,21 @@ impl Widget for &app::App {
         let datasets: Vec<Dataset> = self
             .signals()
             .enumerate()
+            .filter(|(_, (_, set))| set.chart.iter().any(|v| self.on_screen(v.0)))
             .map(|(idx, (name, set))| {
+                let last_in_window = set
+                    .original
+                    .iter()
+                    .zip(set.chart.iter())
+                    .rev()
+                    .find(|(_, (time, _))| self.on_screen(*time))
+                    .map_or("-".into(), |v| format!("{:.2}", v.0));
+                let max_in_window = max_values
+                    .get(name)
+                    .map_or("-".into(), |v| format!("{:.2}", v));
                 let name = format!(
-                    "{name:0$} {1:.2} (max {2:.2})",
-                    max_name_len,
-                    set.original
-                        .iter()
-                        .zip(set.chart.iter())
-                        .rev()
-                        .find(|(_, (time, _))| self.on_screen(*time))
-                        .map_or(&f64::NAN, |v| { v.0 }),
-                    max_values.get(name).unwrap_or(&f64::NAN),
+                    "{name:0$} {1} (max {2})",
+                    max_name_len, last_in_window, max_in_window,
                 );
                 Dataset::default()
                     .name(name)
