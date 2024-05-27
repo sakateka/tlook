@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fmt::Display,
     fs::File,
     io::{self, BufRead, BufReader},
@@ -15,7 +15,7 @@ use color_eyre::{
     eyre::{bail, WrapErr},
     Result,
 };
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Frame;
 
 use crate::term;
@@ -74,6 +74,25 @@ pub struct Signal {
     pub value: f64,
 }
 
+#[derive(Default)]
+pub struct ChartBounds {
+    pub max_name_len: usize,
+    pub original_min: f64,
+    pub original_max: f64,
+    pub scaled_min: f64,
+    pub scaled_max: f64,
+    pub max_values: HashMap<String, f64>,
+    pub label_values: HashMap<String, f64>,
+    pub cursor_points: [(f64, f64); 3],
+}
+
+#[derive(Debug)]
+pub struct ChartLine<'a> {
+    pub color_idx: usize,
+    pub name: String,
+    pub data: &'a [(f64, f64)],
+}
+
 pub struct App {
     pub history: Duration,
     pub window: Duration,
@@ -82,34 +101,45 @@ pub struct App {
     pub axis_labels: bool,
     pub legend: bool,
 
+    input: Receiver<Signal>,
+    current_mode: ScreenMode,
     start_point: Instant,
     elapsed: f64,
-    input: Receiver<Signal>,
     signals: BTreeMap<String, Signals>,
     tick_rate: Duration,
-    current_mode: ScreenMode,
     show_help: bool,
+
+    chart_bounds: ChartBounds,
+    show_cursor: bool,
+    cursor_position: f64,
+
     exit: AtomicBool,
 }
 
 impl App {
     pub fn new(input: Receiver<Signal>, start_time: Instant) -> Self {
+        let window = Duration::from_secs(60);
         Self {
             // TODO: confugure this
             history: Duration::from_secs(3600),
-            window: Duration::from_secs(60),
+            window,
             move_speed: 1.0,
             scale_mode: ChartScale::Liner,
             axis_labels: false,
             legend: true,
 
+            input,
+            current_mode: ScreenMode::Main,
             elapsed: 0.0,
             start_point: start_time,
-            input,
             signals: BTreeMap::new(),
             tick_rate: Duration::from_millis(250),
-            current_mode: ScreenMode::Main,
             show_help: false,
+
+            chart_bounds: Default::default(),
+            show_cursor: false,
+            cursor_position: window.as_secs_f64() / 2.0,
+
             exit: AtomicBool::new(false),
         }
     }
@@ -117,6 +147,7 @@ impl App {
         let mut last_tick = Instant::now();
 
         while !self.exit.load(Ordering::Relaxed) {
+            self.set_chart_bounds();
             terminal.draw(|frame| self.render_frame(frame))?;
 
             let timeout = self.tick_rate.saturating_sub(last_tick.elapsed());
@@ -152,8 +183,8 @@ impl App {
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<()> {
-        match key_event.code {
+    fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
             KeyCode::Char('q') => {
                 if self.show_help {
                     self.show_help = false;
@@ -164,9 +195,11 @@ impl App {
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('w') => {
                 self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 0.8);
+                self.cursor_position *= 0.8;
             }
             KeyCode::Char('W') => {
                 self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 1.2);
+                self.cursor_position *= 1.2;
             }
             KeyCode::Char('h') => {
                 let x_sec = self.start_point.elapsed().as_secs_f64();
@@ -202,14 +235,21 @@ impl App {
             }
             KeyCode::Char('m') => self.move_speed /= 10.0,
             KeyCode::Char('M') => self.move_speed *= 10.0,
-            KeyCode::Left if self.current_mode == ScreenMode::Pause => {
-                if self.elapsed > self.move_speed {
-                    self.elapsed -= self.move_speed;
-                }
+            KeyCode::Left if self.in_pause() && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.elapsed -= self.move_speed;
             }
-            KeyCode::Right if self.current_mode == ScreenMode::Pause => {
+            KeyCode::Right if self.in_pause() && !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.elapsed += self.move_speed
             }
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let new_pos = self.cursor_position - self.move_speed;
+                self.cursor_position = new_pos.clamp(0.0, self.window());
+            }
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let new_pos = self.cursor_position + self.move_speed;
+                self.cursor_position = new_pos.clamp(0.0, self.window());
+            }
+            KeyCode::Char('c') => self.show_cursor = !self.show_cursor,
             _ => {}
         }
         Ok(())
@@ -267,14 +307,140 @@ impl App {
     pub fn window(&self) -> f64 {
         self.window.as_secs_f64()
     }
-    pub fn on_screen(&self, time: f64) -> bool {
-        let left_border = self.elapsed() - self.window();
+    fn left_border(&self) -> f64 {
+        self.elapsed() - self.window()
+    }
+    fn on_screen(&self, time: f64) -> bool {
+        let left_border = self.left_border();
         let right_border = self.elapsed();
         time >= left_border && time <= right_border
     }
 
-    pub fn signals(&self) -> impl Iterator<Item = (&String, &Signals)> + '_ {
-        self.signals.iter()
+    fn in_pause(&self) -> bool {
+        self.current_mode == ScreenMode::Pause
+    }
+
+    pub fn chart_bounds(&self) -> &ChartBounds {
+        &self.chart_bounds
+    }
+    fn set_chart_bounds(&mut self) {
+        let mut max_values = HashMap::new();
+        let mut cursor_values = HashMap::new();
+        let cursor_point = self.cursor_point();
+        let (max_name_len, original_min_max, scaled_min_max) = self
+            .signals
+            .iter()
+            .map(|(name, set)| {
+                let (original_min_max, scaled_min_max) = set
+                    .original
+                    .iter()
+                    .zip(set.chart.iter())
+                    .filter(|(_, (elapsed, _))| self.on_screen(*elapsed))
+                    .map(|item| {
+                        let (original, (elapsed, _)) = item;
+                        let val = cursor_values.entry(name.clone()).or_insert((f64::MAX, 0.0));
+                        let point_diff = (cursor_point - elapsed).abs();
+                        if point_diff < val.0 {
+                            val.0 = point_diff;
+                            val.1 = *original;
+                        }
+                        item
+                    })
+                    .fold(
+                        ((f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
+                        |(acc_orig, acc_scaled), (orig_val, (_, val))| {
+                            (
+                                (acc_orig.0.min(*orig_val), acc_orig.1.max(*orig_val)),
+                                (acc_scaled.0.min(*val), acc_scaled.1.max(*val)),
+                            )
+                        },
+                    );
+                (name, (original_min_max, scaled_min_max))
+            })
+            .fold(
+                (0, (f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
+                |(name_len, oacc, sacc), (name, ((omin, omax), (smin, smax)))| {
+                    let val = max_values.entry(name.clone()).or_insert(f64::MIN);
+                    *val = val.max(omax);
+
+                    (
+                        name_len.max(name.len()),
+                        (oacc.0.min(omin), oacc.1.max(omax)),
+                        (sacc.0.min(smin), sacc.1.max(smax)),
+                    )
+                },
+            );
+
+        let cursor_points = [
+            (cursor_point, scaled_min_max.0),
+            (cursor_point, scaled_min_max.1),
+            (cursor_point, scaled_min_max.0),
+        ];
+        let label_values = cursor_values
+            .into_iter()
+            .map(|(name, (_, val))| (name, val))
+            .collect();
+
+        self.chart_bounds = ChartBounds {
+            max_name_len,
+            original_min: original_min_max.0,
+            original_max: original_min_max.1,
+            scaled_min: scaled_min_max.0,
+            scaled_max: scaled_min_max.1,
+            max_values,
+            label_values,
+            cursor_points,
+        }
+    }
+
+    fn cursor_point(&self) -> f64 {
+        self.left_border() + self.cursor_position
+    }
+
+    pub fn datasets(&self, bounds: &ChartBounds) -> Vec<ChartLine> {
+        let mut sets = Vec::with_capacity(self.signals.len());
+        if self.show_cursor {
+            sets.push(ChartLine {
+                color_idx: 0,
+                name: "".to_string(),
+                data: self.chart_bounds.cursor_points.as_slice(),
+            });
+        }
+        sets.extend(
+            self.signals
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, set))| set.chart.iter().any(|v| self.on_screen(v.0)))
+                .map(|(color_idx, (name, set))| {
+                    let curr_val = if self.show_cursor {
+                        bounds
+                            .label_values
+                            .get(name)
+                            .map_or("-".into(), |v| format!("{:.2}", v))
+                    } else {
+                        set.original
+                            .iter()
+                            .zip(set.chart.iter())
+                            .rev()
+                            .find(|(_, (time, _))| self.on_screen(*time))
+                            .map_or("-".into(), |v| format!("{:.2}", v.0))
+                    };
+                    let max_in_window = bounds
+                        .max_values
+                        .get(name)
+                        .map_or("-".into(), |v| format!("{:.2}", v));
+                    let name = format!(
+                        "{name:0$} {1} (max {2})",
+                        bounds.max_name_len, curr_val, max_in_window,
+                    );
+                    ChartLine {
+                        color_idx,
+                        name,
+                        data: set.chart.as_slice(),
+                    }
+                }),
+        );
+        sets
     }
 }
 

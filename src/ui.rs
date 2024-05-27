@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Div};
+use std::ops::Div;
 
 use ratatui::{
     buffer::Buffer,
@@ -14,80 +14,44 @@ use ratatui::{
 
 use crate::app::{self, ChartScale};
 
+const PALETTE_DARK_CURSOR_COLOR: Color = Color::White;
 const PALETTE_DARK: &[Color] = &[
+    Color::Indexed(3),
+    Color::Indexed(27),
     Color::Indexed(202),
-    Color::Indexed(10),
+    Color::Indexed(2),
     Color::Indexed(11),
     Color::Indexed(13),
     Color::Indexed(14),
-    Color::Indexed(27),
     Color::Indexed(40),
     Color::Indexed(57),
     Color::Indexed(174),
     Color::Indexed(244),
+    Color::Indexed(154),
+    Color::White,
 ];
 
 impl Widget for &app::App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let mut max_values = HashMap::new();
-        let (max_name_len, original_min_max, scaled_min_max) = self
-            .signals()
-            .map(|(name, set)| {
-                let (original_min_max, scaled_min_max) = set
-                    .original
-                    .iter()
-                    .zip(set.chart.iter())
-                    .filter(|(_, (elapsed, _))| self.on_screen(*elapsed))
-                    .fold(
-                        ((f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
-                        |(acc_orig, acc_scaled), (orig_val, (_, val))| {
-                            (
-                                (acc_orig.0.min(*orig_val), acc_orig.1.max(*orig_val)),
-                                (acc_scaled.0.min(*val), acc_scaled.1.max(*val)),
-                            )
-                        },
-                    );
-                (name, (original_min_max, scaled_min_max))
-            })
-            .fold(
-                (0, (f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
-                |(name_len, oacc, sacc), (name, ((omin, omax), (smin, smax)))| {
-                    let val = max_values.entry(name).or_insert(f64::MIN);
-                    *val = val.max(omax);
-
-                    (
-                        name_len.max(name.len()),
-                        (oacc.0.min(omin), oacc.1.max(omax)),
-                        (sacc.0.min(smin), sacc.1.max(smax)),
-                    )
-                },
-            );
-
+        let bounds = self.chart_bounds();
         let datasets: Vec<Dataset> = self
-            .signals()
-            .enumerate()
-            .filter(|(_, (_, set))| set.chart.iter().any(|v| self.on_screen(v.0)))
-            .map(|(idx, (name, set))| {
-                let last_in_window = set
-                    .original
-                    .iter()
-                    .zip(set.chart.iter())
-                    .rev()
-                    .find(|(_, (time, _))| self.on_screen(*time))
-                    .map_or("-".into(), |v| format!("{:.2}", v.0));
-                let max_in_window = max_values
-                    .get(name)
-                    .map_or("-".into(), |v| format!("{:.2}", v));
-                let name = format!(
-                    "{name:0$} {1} (max {2})",
-                    max_name_len, last_in_window, max_in_window,
-                );
-                Dataset::default()
-                    .name(name)
+            .datasets(bounds)
+            .into_iter()
+            .map(|line| {
+                let mut ds = Dataset::default()
                     .marker(symbols::Marker::Braille)
                     .graph_type(GraphType::Line)
-                    .style(Style::default().fg(PALETTE_DARK[idx % PALETTE_DARK.len()]))
-                    .data(&set.chart)
+                    .data(line.data);
+
+                if line.name.is_empty() {
+                    // Cursor
+                    ds = ds.style(Style::default().fg(PALETTE_DARK_CURSOR_COLOR));
+                } else {
+                    ds = ds.name(line.name).style(
+                        Style::default().fg(PALETTE_DARK[line.color_idx % PALETTE_DARK.len()]),
+                    )
+                }
+                ds
             })
             .collect();
 
@@ -96,7 +60,7 @@ impl Widget for &app::App {
         let mut x_axis = Axis::default()
             .style(Style::default().fg(Color::Gray))
             .bounds(window_width);
-        let window_height = [scaled_min_max.0, scaled_min_max.1];
+        let window_height = [bounds.scaled_min, bounds.scaled_max];
         let mut y_axis = Axis::default()
             .style(Style::default().fg(Color::Gray))
             // .labels(vec!["-20".bold(), "0".into(), "20".bold()])
@@ -123,9 +87,9 @@ impl Widget for &app::App {
                 "...".to_string()
             };
             y_axis = y_axis.labels(vec![
-                format!("{:.2}", original_min_max.0).into(),
+                format!("{:.2}", bounds.original_min).into(),
                 middle_label.into(),
-                format!("{:.2}", original_min_max.1).into(),
+                format!("{:.2}", bounds.original_max).into(),
             ]);
         }
 
@@ -146,28 +110,27 @@ pub fn render_help(f: &mut Frame) {
         .borders(Borders::ALL)
         .style(Style::default());
 
-    let area = centered_rect(60, 40, f.size());
+    let area = centered_rect(60, 80, f.size());
     let rows = [
         Row::new(vec!["q", "quit"]),
-        Row::new(vec!["?", "show/hide help"]),
+        Row::new(vec!["?", "show/hide this help"]),
         Row::new(vec!["w", "norrow the chart data window by 20%"]),
         Row::new(vec!["W", "expand the chart data window by 20%"]),
         Row::new(vec!["h", "keep 2x less history"]),
         Row::new(vec!["H", "keep 2x more history"]),
-        Row::new(vec!["a", "show/hide axis labels"]),
-        Row::new(vec!["l", "show/hide legend"]),
-        Row::new(vec!["s", "rotate liner, asinh scale mode"]),
-        Row::new(vec![
-            "m",
-            "set 10x slower window movement speed (in pause mode)",
-        ]),
-        Row::new(vec![
-            "M",
-            "set 10x faster window movement speed (in pause mode)",
-        ]),
-        Row::new(vec!["Right", "move window to right (in pause mode)"]),
-        Row::new(vec!["Left", "move window to right (in pause mode)"]),
-        Row::new(vec!["Space", "pause chart"]),
+        Row::new(vec!["a", "show/hide the axis labels"]),
+        Row::new(vec!["l", "show/hide the legend"]),
+        Row::new(vec!["c", "show/hide the cursor"]),
+        Row::new(vec!["s", "rotate the scale mode: liner, asinh"]),
+        Row::new(vec!["m", "set the window movement speed 10x slower"]),
+        Row::new(vec!["M", "set the window movement speed 10x faster"]),
+        Row::new(vec!["Ctrl+Right", "move the cursor to the right"]),
+        Row::new(vec!["Ctrl+Left", "move the cursor to the left"]),
+        Row::new(vec!["Space", "pause the chart"]),
+        Row::new(vec!["", ""]),
+        Row::new(vec!["", "In pause mode"]),
+        Row::new(vec!["Right", "move the window to the right"]),
+        Row::new(vec!["Left", "move the window to the left"]),
     ];
     // Columns widths are constrained in the same way as Layout...
     let widths = Constraint::from_fills([3, 18]);
