@@ -27,11 +27,10 @@ or
 while sleep 0.2; do rg '(MemFree|Active|AnonPages|Dirty):\s+(\d+)' -or '$1=$2' /proc/meminfo; done |tlook
 ```
 
-# Video Demo
+# Demo
 
 `python samples/graph-on-screenshot.py |cargo run --release`
 
 Press `?` for help.
 
-Watch the video
 [![asciicast](https://asciinema.org/a/AzSyFitAXabbis29pVNx9uTCe.svg)](https://asciinema.org/a/AzSyFitAXabbis29pVNx9uTCe)
