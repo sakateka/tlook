@@ -27,9 +27,11 @@ or
 while sleep 0.2; do rg '(MemFree|Active|AnonPages|Dirty):\s+(\d+)' -or '$1=$2' /proc/meminfo; done |tlook
 ```
 
-# Screenshot
+# Video Demo
 
 `python samples/graph-on-screenshot.py |cargo run --release`
+
 Press `?` for help.
 
-![2024-05-19T12:46:18,396730332+03:00](https://github.com/sakateka/tlook/assets/2256154/640684cc-a456-4008-9b04-58fdd54bb927)
+Watch the video
+[![Watch the video](https://github.com/sakateka/tlook/assets/2256154/25fb8a0b-9775-446e-a8bc-118bb58a1662)](https://youtu.be/82W3PKhF3C4?si=Fk6WvK_n7M6soQJH)
