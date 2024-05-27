@@ -26,4 +26,8 @@ while sleep 0.2; do rg '(MemFree|Active|AnonPages|Dirty):\s+(\d+)' -or '$1=$2' /
 ```
 
 # Screenshot
+
+`python samples/graph-on-screenshot.py |cargo run --release`
+Press `?` for help.
+
 ![2024-05-19T12:46:18,396730332+03:00](https://github.com/sakateka/tlook/assets/2256154/640684cc-a456-4008-9b04-58fdd54bb927)
