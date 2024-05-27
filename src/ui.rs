@@ -69,9 +69,13 @@ impl Widget for &app::App {
         let mut legend_position = None;
         if self.legend {
             legend_position = Some(LegendPosition::TopLeft);
+            let mut cursor_legend = "".to_string();
+            if self.show_cursor {
+                cursor_legend = format!(" c={:.2}s", self.cursor_point());
+            }
             y_axis = y_axis.title(format!(
-                "w={:.2?} h={:.2?} m={}s s={}",
-                self.window, self.history, self.move_speed, self.scale_mode,
+                "w={:.2?} h={:.2?} m={}s s={}{}",
+                self.window, self.history, self.move_speed, self.scale_mode, cursor_legend,
             ));
         }
         if self.axis_labels {

@@ -100,6 +100,7 @@ pub struct App {
     pub scale_mode: ChartScale,
     pub axis_labels: bool,
     pub legend: bool,
+    pub show_cursor: bool,
 
     input: Receiver<Signal>,
     current_mode: ScreenMode,
@@ -110,7 +111,6 @@ pub struct App {
     show_help: bool,
 
     chart_bounds: ChartBounds,
-    show_cursor: bool,
     cursor_position: f64,
 
     exit: AtomicBool,
@@ -393,7 +393,7 @@ impl App {
         }
     }
 
-    fn cursor_point(&self) -> f64 {
+    pub fn cursor_point(&self) -> f64 {
         self.left_border() + self.cursor_position
     }
 
