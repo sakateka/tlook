@@ -34,4 +34,4 @@ while sleep 0.2; do rg '(MemFree|Active|AnonPages|Dirty):\s+(\d+)' -or '$1=$2' /
 Press `?` for help.
 
 Watch the video
-[![Watch the video](https://github.com/sakateka/tlook/assets/2256154/25fb8a0b-9775-446e-a8bc-118bb58a1662)](https://youtu.be/82W3PKhF3C4?si=Fk6WvK_n7M6soQJH)
+[![asciicast](https://asciinema.org/a/AzSyFitAXabbis29pVNx9uTCe.svg)](https://asciinema.org/a/AzSyFitAXabbis29pVNx9uTCe)
