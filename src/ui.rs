@@ -124,17 +124,17 @@ pub fn render_help(f: &mut Frame) {
         Row::new(vec!["H", "keep 2x more history"]),
         Row::new(vec!["a", "show/hide the axis labels"]),
         Row::new(vec!["l", "show/hide the legend"]),
-        Row::new(vec!["c", "show/hide the cursor"]),
         Row::new(vec!["s", "rotate the scale mode: liner, asinh"]),
         Row::new(vec!["m", "set the window movement speed 10x slower"]),
         Row::new(vec!["M", "set the window movement speed 10x faster"]),
-        Row::new(vec!["Ctrl+Right", "move the cursor to the right"]),
-        Row::new(vec!["Ctrl+Left", "move the cursor to the left"]),
+        Row::new(vec!["c", "show/hide the cursor"]),
+        Row::new(vec!["Right", "move the cursor to the right"]),
+        Row::new(vec!["Left", "move the cursor to the left"]),
         Row::new(vec!["Space", "pause the chart"]),
         Row::new(vec!["", ""]),
         Row::new(vec!["", "In pause mode"]),
-        Row::new(vec!["Right", "move the window to the right"]),
-        Row::new(vec!["Left", "move the window to the left"]),
+        Row::new(vec!["Ctrl+Right", "move the window to the right"]),
+        Row::new(vec!["Ctrl+Left", "move the window to the left"]),
     ];
     // Columns widths are constrained in the same way as Layout...
     let widths = Constraint::from_fills([3, 18]);

@@ -235,17 +235,17 @@ impl App {
             }
             KeyCode::Char('m') => self.move_speed /= 10.0,
             KeyCode::Char('M') => self.move_speed *= 10.0,
-            KeyCode::Left if self.in_pause() && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Left if self.in_pause() && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.elapsed -= self.move_speed;
             }
-            KeyCode::Right if self.in_pause() && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Right if self.in_pause() && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.elapsed += self.move_speed
             }
-            KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Left if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let new_pos = self.cursor_position - self.move_speed;
                 self.cursor_position = new_pos.clamp(0.0, self.window());
             }
-            KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Right if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let new_pos = self.cursor_position + self.move_speed;
                 self.cursor_position = new_pos.clamp(0.0, self.window());
             }
