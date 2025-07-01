@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-color-eyre = "0.6.3"
-crossterm = "0.27.0"
-env_logger = "0.11.3"
-log = "0.4.21"
-rand = "0.8.5"
-ratatui = "0.26.2"
+clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6.5"
+crossterm = "0.29.0"
+env_logger = "0.11.8"
+log = "0.4.27"
+rand = "0.9.1"
+ratatui = "0.29.0"
+shell-words = "1.1"

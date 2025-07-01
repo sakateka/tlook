@@ -1,36 +1,100 @@
-# Term Look
-A tool for fast charting in the terminal.
+# 📊 tlook - Terminal Metrics Visualizer
 
-# How to
-You have metrics in the form
-```
-key1=value1
-key2=value2
-key3=value3;key4=value4
-...
-```
-You want to display them in the terminal and zoom in/out in the history. You are in the right place.
+Real-time charting of metrics in your terminal. Monitor anything that produces numbers!
 
-# Examples
-Measure and plot ping timings
-```
-bash -c 'for ip in cloudflare.com lua.org yahoo.com; do ping -i 0.5 $ip  |rg --line-buffered "time=([\d.]+)" -or "ping $ip time=\$1;" & done; wait'|tlook
-```
-![2024-05-27T15:05:35,263416706+03:00](https://github.com/sakateka/tlook/assets/2256154/54a1dcee-e98a-4c40-96cc-997cad92b440)
+## 🚀 Quick Start
 
-Monitor memory usage
-```
-while sleep 0.5; do free -m|rg 'Mem:\s+(\d+)\s+(\d+)\s+(\d+)' -or 'total=$1;used=$2;free=$3'; done|tlook
-```
-or
-```
-while sleep 0.2; do rg '(MemFree|Active|AnonPages|Dirty):\s+(\d+)' -or '$1=$2' /proc/meminfo; done |tlook
+```bash
+# Monitor CPU usage every second
+tlook -c "top -bn1 | grep 'Cpu(s)' | awk '{print \"cpu_usage=\" \$2}' | tr -d '%us,'"
+
+# Watch memory usage
+tlook -c "free | awk '/^Mem:/ {printf \"memory_used=%.1f\\n\", \$3/\$2*100}'"
+
+# Monitor disk I/O
+tlook -p "iostat -x 1 | stdbuf -o0 awk '/^nvme/ {print \$1 \"_util=\" \$10}'"
 ```
 
-# Demo
+## 💡 How It Works
 
-`python samples/graph-on-screenshot.py |cargo run --release`
+**tlook** expects metrics in simple `name=value` format:
+```
+cpu=75.5
+memory=60.2
+disk_io=23.1;network_rx=156.7
+```
 
-Press `?` for help.
+## 📖 Usage
+
+```bash
+tlook [OPTIONS]
+```
+
+### Command Types
+
+| Flag | Type | Description | Best For |
+|------|------|-------------|----------|
+| `-p` | **Process** | Long-running commands that continuously output data | `ping`, `iostat`, `top`, log tails |
+| `-c` | **Command** | Short commands that run repeatedly | `free`, `df`, `uptime`, quick checks |
+
+### Options
+- `--interval <SECONDS>` - How often to repeat commands (default: 1)
+- `--stdin` - Read from stdin pipe
+- `-f <FILE>` - Read from named pipe (FIFO) for real-time streaming
+
+## 🎯 Real-World Examples
+
+### 🌐 Network Monitoring
+```bash
+# Ping multiple hosts
+tlook \
+  -p "ping google.com | grep --line-buffered -o 'time=[0-9.]*' | sed -u 's/time=/google=/'" \
+  -p "ping github.com | grep --line-buffered -o 'time=[0-9.]*' | sed -u 's/time=/github=/'"
+
+# Network traffic
+tlook -c "cat /proc/net/dev | awk '/wlp0/ {print \"rx_mb=\" \$2/1024/1024 \";tx_mb=\" \$10/1024/1024}'" --interval 2
+```
+
+### 💾 System Resources
+```bash
+# Complete system overview
+tlook \
+  -c "free | awk '/^Mem:/ {printf \"memory=%.1f\\n\", \$3/\$2*100}'" \
+  -c "df -h / | awk 'NR==2 {gsub(/%/, \"\"); print \"disk=\" \$5}'" \
+  -c "uptime | awk '{print \"load=\" \$(NF-2)}' | tr -d ','"
+```
+
+### 🐳 Docker Containers
+```bash
+# Monitor container stats
+tlook -c "docker stats --no-stream --format 'table {{.Container}}\t{{.CPUPerc}}\t{{.MemPerc}}' | awk 'NR>1 {gsub(/%/, \"\"); print \$1 \"_cpu=\" \$2 \";\" \$1 \"_mem=\" \$3}'"
+```
+
+### 📊 Custom Metrics
+```bash
+# Using named pipe for real-time app metrics
+mkfifo /tmp/metrics
+your_app_logger > /tmp/metrics &
+tlook -f /tmp/metrics
+
+# Database connections
+tlook -c "mysql -e 'SHOW STATUS LIKE \"Threads_connected\"' | awk 'NR==2 {print \"db_connections=\" \$2}'" --interval 5
+```
+
+## ⌨️ Controls
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| `?` | Show help | `q` | Quit |
+| `w/W` | Zoom time window | `h/H` | Adjust history |
+| `a` | Toggle axis labels | `l` | Toggle legend |
+| `s` | Scale mode (linear/asinh) | `c` | Toggle cursor |
+| `←/→` | Move cursor | `Space` | Pause/resume |
+
+## 🎬 Demo
+
+```bash
+python samples/graph-on-screenshot.py | cargo run --release -- --stdin
+```
 
 [![asciicast](https://asciinema.org/a/AzSyFitAXabbis29pVNx9uTCe.svg)](https://asciinema.org/a/AzSyFitAXabbis29pVNx9uTCe)

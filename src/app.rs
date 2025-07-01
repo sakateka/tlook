@@ -3,6 +3,7 @@ use std::{
     fmt::Display,
     fs::File,
     io::{self, BufRead, BufReader},
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
@@ -164,7 +165,7 @@ impl App {
     }
 
     fn render_frame(&self, frame: &mut Frame) {
-        frame.render_widget(self, frame.size());
+        frame.render_widget(self, frame.area());
         if self.show_help {
             ui::render_help(frame);
         }
@@ -336,7 +337,7 @@ impl App {
                     .iter()
                     .zip(set.chart.iter())
                     .filter(|(_, (elapsed, _))| self.on_screen(*elapsed))
-                    .map(|item| {
+                    .inspect(|&item| {
                         let (original, (elapsed, _)) = item;
                         let val = cursor_values.entry(name.clone()).or_insert((f64::MAX, 0.0));
                         let point_diff = (cursor_point - elapsed).abs();
@@ -344,7 +345,6 @@ impl App {
                             val.0 = point_diff;
                             val.1 = *original;
                         }
-                        item
                     })
                     .fold(
                         ((f64::MAX, f64::MIN), (f64::MAX, f64::MIN)),
@@ -453,44 +453,268 @@ pub fn file_reader(file: String) -> Box<dyn Iterator<Item = io::Result<String>>>
     Box::new(BufReader::new(f).lines())
 }
 
-pub fn get_input_channel(mode: String, start_time: Instant) -> io::Result<Receiver<Signal>> {
+fn process_lines_from_iterator<I>(lines: I, start_time: Instant, tx: mpsc::Sender<Signal>)
+where
+    I: Iterator<Item = io::Result<String>>,
+{
+    for line in lines {
+        let Ok(line) = line else {
+            log::error!("ignore input error: {:?}", line);
+            continue;
+        };
+
+        if !process_metric_line_with_context(&line, "line", start_time, &tx) {
+            return;
+        }
+    }
+}
+
+pub fn get_input_channel_from_stdin(start_time: Instant) -> io::Result<Receiver<Signal>> {
     let (tx, rx) = mpsc::channel();
 
-    // TODO join handler
     thread::spawn(move || {
-        let lines = if mode == "stdin" {
-            stdin_reader()
-        } else {
-            file_reader(mode)
-        };
-        for line in lines {
-            let Ok(line) = line else {
-                log::error!("ignore input error: {:?}", line);
-                continue;
-            };
+        let lines = stdin_reader();
+        process_lines_from_iterator(lines, start_time, tx);
+    });
+    Ok(rx)
+}
 
-            for metric in line.split(';').filter(|x| !x.is_empty()) {
-                match App::parse_input(metric) {
-                    Ok((name, value)) => {
-                        log::debug!("line: {name}={value}");
-                        let x_time = start_time.elapsed().as_secs_f64();
-                        let res = tx.send(Signal {
-                            name,
-                            x_time,
-                            value,
-                        });
-                        if res.is_err() {
-                            log::error!("receiver closed? {res:?}");
+pub fn get_input_channel_from_file(
+    file: String,
+    start_time: Instant,
+) -> io::Result<Receiver<Signal>> {
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let lines = file_reader(file);
+        process_lines_from_iterator(lines, start_time, tx);
+    });
+    Ok(rx)
+}
+
+fn is_shell_script(command: &str) -> bool {
+    command.contains(';')
+        || command.contains('|')
+        || command.contains("&&")
+        || command.contains("||")
+        || command.contains('$')
+        || command.contains('<')
+        || command.contains('>')
+}
+
+fn parse_command_args(command: &str) -> Result<(String, Vec<String>), String> {
+    if is_shell_script(command) {
+        // Execute as shell script
+        Ok((
+            "sh".to_string(),
+            vec!["-c".to_string(), command.to_string()],
+        ))
+    } else {
+        // Parse as individual command with arguments
+        let parsed_args = shell_words::split(command)
+            .map_err(|e| format!("Failed to parse command '{}': {}", command, e))?;
+
+        if parsed_args.is_empty() {
+            return Err("Empty command string".to_string());
+        }
+
+        let cmd = parsed_args[0].clone();
+        let args = parsed_args[1..].to_vec();
+        Ok((cmd, args))
+    }
+}
+
+fn process_metric_line_with_context(
+    line: &str,
+    context: &str,
+    start_time: Instant,
+    tx: &mpsc::Sender<Signal>,
+) -> bool {
+    for metric in line.split(';').filter(|x| !x.is_empty()) {
+        match App::parse_input(metric) {
+            Ok((name, value)) => {
+                log::debug!("'{}': {name}={value}", context);
+                let x_time = start_time.elapsed().as_secs_f64();
+                let res = tx.send(Signal {
+                    name,
+                    x_time,
+                    value,
+                });
+                if res.is_err() {
+                    log::error!("receiver closed? {res:?}");
+                    return false;
+                }
+            }
+            Err(e) => {
+                log::debug!("ignore parsing err {e} for {line} from '{}'", context);
+                continue;
+            }
+        }
+    }
+    true
+}
+
+pub fn get_input_channel_from_processes(
+    processes: Vec<String>,
+    start_time: Instant,
+    tx: mpsc::Sender<Signal>,
+) {
+    for process_str in processes {
+        let tx_clone = tx.clone();
+        let start_time_clone = start_time;
+
+        thread::spawn(move || {
+            loop {
+                log::info!("Starting process: {}", process_str);
+
+                let (cmd, args) = match parse_command_args(&process_str) {
+                    Ok((cmd, args)) => (cmd, args),
+                    Err(e) => {
+                        log::error!("{}", e);
+                        thread::sleep(Duration::from_secs(5));
+                        continue;
+                    }
+                };
+
+                log::info!("Starting process: {process_str}");
+                let mut child = match Command::new(&cmd)
+                    .args(&args)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                {
+                    Ok(child) => child,
+                    Err(e) => {
+                        log::error!("Failed to spawn process '{}': {}", process_str, e);
+                        thread::sleep(Duration::from_secs(5));
+                        continue;
+                    }
+                };
+
+                // Read from stdout continuously for long-running processes
+                if let Some(stdout) = child.stdout.take() {
+                    let reader = BufReader::new(stdout);
+                    for line in reader.lines() {
+                        let line = match line {
+                            Ok(line) => line,
+                            Err(e) => {
+                                log::error!("Failed to read from process '{}': {}", process_str, e);
+                                break;
+                            }
+                        };
+
+                        if !process_metric_line_with_context(
+                            &line,
+                            &process_str,
+                            start_time_clone,
+                            &tx_clone,
+                        ) {
                             return;
                         }
                     }
+                }
+
+                // Wait for the process to finish
+                match child.wait() {
+                    Ok(status) => {
+                        log::info!("Process '{}' exited with status: {}", process_str, status);
+                    }
                     Err(e) => {
-                        log::error!("ignore parsing err {e} for {line}");
-                        continue;
+                        log::error!("Failed to wait for process '{}': {}", process_str, e);
                     }
                 }
+
+                // Restart the process after a short delay
+                log::info!("Restarting process '{}' in 1 second...", process_str);
+                thread::sleep(Duration::from_secs(1));
             }
-        }
-    });
+        });
+    }
+}
+
+pub fn get_input_channel_from_commands(
+    commands: Vec<String>,
+    interval_secs: u64,
+    start_time: Instant,
+    tx: mpsc::Sender<Signal>,
+) {
+    for command_str in commands {
+        let tx_clone = tx.clone();
+        let start_time_clone = start_time;
+        let interval = Duration::from_secs(interval_secs);
+
+        thread::spawn(move || {
+            loop {
+                log::info!("Executing command: {}", command_str);
+
+                let (cmd, args) = match parse_command_args(&command_str) {
+                    Ok((cmd, args)) => (cmd, args),
+                    Err(e) => {
+                        log::error!("{}", e);
+                        thread::sleep(interval);
+                        continue;
+                    }
+                };
+
+                // Spawn the command and wait for it to complete
+                let output = match Command::new(&cmd).args(&args).output() {
+                    Ok(output) => output,
+                    Err(e) => {
+                        log::error!("Failed to execute command '{}': {}", command_str, e);
+                        thread::sleep(interval);
+                        continue;
+                    }
+                };
+
+                // Process the output
+                let stdout_str = String::from_utf8_lossy(&output.stdout);
+                for line in stdout_str.lines() {
+                    if !process_metric_line_with_context(
+                        line,
+                        &command_str,
+                        start_time_clone,
+                        &tx_clone,
+                    ) {
+                        return;
+                    }
+                }
+
+                if !output.status.success() {
+                    let stderr_str = String::from_utf8_lossy(&output.stderr);
+                    log::warn!(
+                        "Command '{}' failed with status {}: {}",
+                        command_str,
+                        output.status,
+                        stderr_str
+                    );
+                }
+
+                // Wait for the specified interval before running again
+                thread::sleep(interval);
+            }
+        });
+    }
+}
+
+pub fn get_input_channel_from_processes_and_commands(
+    processes: Vec<String>,
+    commands: Vec<String>,
+    interval_secs: u64,
+    start_time: Instant,
+) -> io::Result<Receiver<Signal>> {
+    let (tx, rx) = mpsc::channel();
+
+    // Handle long-running processes
+    if !processes.is_empty() {
+        get_input_channel_from_processes(processes, start_time, tx.clone());
+    }
+
+    // Handle interval-based commands
+    if !commands.is_empty() {
+        get_input_channel_from_commands(commands, interval_secs, start_time, tx.clone());
+    }
+
+    // Drop the original sender so the channel closes when all threads finish
+    drop(tx);
     Ok(rx)
 }

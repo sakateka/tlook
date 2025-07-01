@@ -2,12 +2,12 @@ use std::ops::Div;
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style, Stylize},
     symbols,
+    text::Line,
     widgets::{
-        block::Title, Axis, Block, Borders, Chart, Clear, Dataset, GraphType, LegendPosition, Row,
-        Table, Widget,
+        Axis, Block, Borders, Chart, Clear, Dataset, GraphType, LegendPosition, Row, Table, Widget,
     },
     Frame,
 };
@@ -80,9 +80,9 @@ impl Widget for &app::App {
         }
         if self.axis_labels {
             x_axis = x_axis.labels(vec![
-                format!("{:.1}s", self.elapsed() - self.window()).into(),
-                format!("{:.1}s", self.elapsed() - self.window() / 2.0).into(),
-                format!("{:.1}s", self.elapsed()).into(),
+                format!("{:.1}s", self.elapsed() - self.window()),
+                format!("{:.1}s", self.elapsed() - self.window() / 2.0),
+                format!("{:.1}s", self.elapsed()),
             ]);
 
             let middle_label = if self.scale_mode == ChartScale::Liner {
@@ -91,9 +91,9 @@ impl Widget for &app::App {
                 "...".to_string()
             };
             y_axis = y_axis.labels(vec![
-                format!("{:.2}", bounds.original_min).into(),
-                middle_label.into(),
-                format!("{:.2}", bounds.original_max).into(),
+                format!("{:.2}", bounds.original_min),
+                middle_label,
+                format!("{:.2}", bounds.original_max),
             ]);
         }
 
@@ -108,13 +108,13 @@ impl Widget for &app::App {
 }
 
 pub fn render_help(f: &mut Frame) {
-    let title = Title::from(" Help ".bold());
+    let title = Line::from(" Help ");
     let popup_block = Block::default()
-        .title(title.alignment(Alignment::Center))
+        .title_top(title.centered())
         .borders(Borders::ALL)
         .style(Style::default());
 
-    let area = centered_rect(60, 80, f.size());
+    let area = centered_rect(60, 80, f.area());
     let rows = [
         Row::new(vec!["q", "quit"]),
         Row::new(vec!["?", "show/hide this help"]),
@@ -153,7 +153,7 @@ pub fn render_help(f: &mut Frame) {
         // As any other widget, a Table can be wrapped in a Block.
         .block(popup_block)
         // The selected row and its content can also be styled.
-        .highlight_style(Style::new().reversed())
+        .row_highlight_style(Style::new().reversed())
         // ...and potentially show a symbol in front of the selection.
         .highlight_symbol(">>");
 
