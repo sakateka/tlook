@@ -74,7 +74,7 @@ tlook -c "docker stats --no-stream --format 'table {{.Container}}\t{{.CPUPerc}}\
 ```bash
 # Using named pipe for real-time app metrics
 mkfifo /tmp/metrics
-your_app_logger > /tmp/metrics &
+your_app > /tmp/metrics &
 tlook -f /tmp/metrics
 
 # Database connections
