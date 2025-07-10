@@ -117,6 +117,7 @@ pub fn render_help(f: &mut Frame) {
     let area = centered_rect(60, 80, f.area());
     let rows = [
         Row::new(vec!["q", "quit"]),
+        Row::new(vec!["Ctrl+C", "quit"]),
         Row::new(vec!["?", "show/hide this help"]),
         Row::new(vec!["w", "norrow the chart data window by 20%"]),
         Row::new(vec!["W", "expand the chart data window by 20%"]),

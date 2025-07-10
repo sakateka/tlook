@@ -193,6 +193,7 @@ impl App {
                     self.exit()
                 }
             }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.exit(),
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('w') => {
                 self.window = Duration::from_secs_f64(self.window.as_secs_f64() * 0.8);
