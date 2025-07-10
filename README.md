@@ -67,7 +67,7 @@ tlook \
 ### 🐳 Docker Containers
 ```bash
 # Monitor container stats
-tlook -c "docker stats --no-stream --format 'table {{.Container}}\t{{.CPUPerc}}\t{{.MemPerc}}' | awk 'NR>1 {gsub(/%/, \"\"); print \$1 \"_cpu=\" \$2 \";\" \$1 \"_mem=\" \$3}'"
+tlook -c "docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}' | awk 'NR>1 {gsub(/%/, \"\"); print \$1 \"_cpu=\" \$2}'"
 ```
 
 ### 📊 Custom Metrics
